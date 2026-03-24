@@ -1,15 +1,22 @@
 """
-Initiates the outbound call to Isaac via Twilio.
-Run this AFTER the Flask app and ngrok are running.
+Initiates the outbound call via Twilio.
+The Flask app runs on Railway — no local server needed.
 
 Usage:
     python make_call.py
+    # or set CALL_RECIPIENT_NAME and CALL_TOPIC env vars (done by mcp_server.py)
 """
 
 import os
 import sys
+import urllib3
+from urllib.parse import urlencode
 from twilio.rest import Client
+from twilio.http.http_client import TwilioHttpClient
 from dotenv import load_dotenv
+
+# Workaround for corporate SSL inspection — remove once network issue is resolved
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 load_dotenv()
 
@@ -27,20 +34,34 @@ if missing:
     print("Please fill in your .env file first.")
     sys.exit(1)
 
-client = Client(os.getenv("TWILIO_ACCOUNT_SID"), os.getenv("TWILIO_AUTH_TOKEN"))
+http_client = TwilioHttpClient()
+http_client.session.verify = False
+client = Client(os.getenv("TWILIO_ACCOUNT_SID"), os.getenv("TWILIO_AUTH_TOKEN"), http_client=http_client)
 base_url = os.getenv("BASE_URL").rstrip("/")
 
-print(f"Calling {os.getenv('TARGET_PHONE_NUMBER')} ...")
+target = os.getenv("TARGET_PHONE_NUMBER")
+name = os.getenv("CALL_RECIPIENT_NAME", "")
+topic = os.getenv("CALL_TOPIC", "")
+
+print(f"Calling {target}" + (f" — topic: {topic}" if topic else "") + " ...")
+
+# Pass name + topic to Railway so the greeting and system prompt can be personalised
+params = {}
+if name:
+    params["name"] = name
+if topic:
+    params["topic"] = topic
+query = ("?" + urlencode(params)) if params else ""
 
 call = client.calls.create(
-    to=os.getenv("TARGET_PHONE_NUMBER"),
+    to=target,
     from_=os.getenv("TWILIO_PHONE_NUMBER"),
-    url=f"{base_url}/answer",
+    url=f"{base_url}/answer{query}",
     status_callback=f"{base_url}/status",
     status_callback_event=["completed"],
     status_callback_method="POST",
 )
 
 print(f"Call initiated! SID: {call.sid}")
-print("Watch the Flask terminal for live conversation logs.")
-print("Transcript will be saved automatically when the call ends.")
+print("Watch Railway logs for the live conversation: https://railway.app")
+print("Transcript will be printed to Railway logs when the call ends.")
