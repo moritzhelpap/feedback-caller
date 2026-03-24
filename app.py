@@ -34,26 +34,21 @@ latest_call_sid: str | None = None
 def build_system_prompt(name: str, topic: str) -> str:
     return f"""\
 You are making a warm, friendly phone call to {name} on behalf of their friend Moritz.
-The purpose of this call is: {topic}
+You have just delivered this opening message: "{topic}"
 
 Your goals:
-1. Have a genuine, warm conversation — not scripted or stiff.
-2. You already delivered the opening greeting, so don't repeat it.
-3. Address the call topic naturally and helpfully.
-4. Listen and respond to whatever {name} says.
-5. Keep replies brief — 2 to 4 sentences max, since this is a phone call.
-6. When the conversation feels complete, or {name} signals they want to wrap up, say a warm goodbye.
+1. Stay focused on exactly that topic — do not invent new subjects or go off on tangents.
+2. Listen and respond naturally to what {name} says.
+3. Keep replies brief — 2 to 4 sentences max, since this is a phone call.
+4. When the conversation feels complete, or {name} signals they want to wrap up, say a warm goodbye.
    End your final message with the exact token: [HANGUP]
 
-Be conversational, warm, and genuine. Never use filler like "Certainly!" or "Of course!".\
+Be warm and genuine. Never use filler like "Certainly!" or "Of course!".\
 """
 
 
 def build_greeting(name: str, topic: str) -> str:
-    return (
-        f"Hey {name}, it's great to catch you! I just wanted to quickly reach out — "
-        f"{topic}. I wanted to check in — is there anything on your end we should talk through?"
-    )
+    return f"Hey {name}! {topic}"
 
 
 # ---------------------------------------------------------------------------
@@ -93,12 +88,20 @@ def answer():
     name = request.args.get("name", "there")
     topic = request.args.get("topic", "just checking in")
 
+    # Hang up if Twilio's answering machine detection flagged this as voicemail/fax
+    answered_by = request.form.get("AnsweredBy", "")
+    if answered_by in ("machine_start", "machine_end_beep", "machine_end_silence", "fax"):
+        print(f"[{call_sid[:8]}] Voicemail detected ({answered_by}) — hanging up.")
+        response = VoiceResponse()
+        response.hangup()
+        return Response(str(response), mimetype="text/xml")
+
     greeting = build_greeting(name, topic)
     system_prompt = build_system_prompt(name, topic)
 
     transcripts.setdefault(call_sid, [])
     # Store system prompt alongside transcript so /respond can retrieve it
-    transcripts[call_sid] = {"system": system_prompt, "messages": []}
+    transcripts[call_sid] = {"system": system_prompt, "messages": [], "name": name}
     transcripts[call_sid]["messages"].append({"role": "assistant", "content": greeting})
 
     response = VoiceResponse()
@@ -210,7 +213,7 @@ def status():
 
     entry = transcripts.get(call_sid)
     if entry and entry.get("messages"):
-        _save_transcript(call_sid, entry["messages"], call_status, duration)
+        _save_transcript(call_sid, entry["messages"], call_status, duration, entry.get("name", "Caller"))
 
     return "", 204
 
@@ -256,13 +259,13 @@ def list_transcripts():
 # Helpers
 # ---------------------------------------------------------------------------
 
-def _save_transcript(call_sid: str, messages: list[dict], status: str, duration: str):
+def _save_transcript(call_sid: str, messages: list[dict], status: str, duration: str, name: str = "Caller"):
     timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
     filename = f"transcript_{timestamp}.txt"
 
     with open(filename, "w", encoding="utf-8") as f:
         f.write("=" * 60 + "\n")
-        f.write("CALL TRANSCRIPT — Isaac Farewell Call\n")
+        f.write("CALL TRANSCRIPT\n")
         f.write("=" * 60 + "\n")
         f.write(f"Date       : {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
         f.write(f"Call SID   : {call_sid}\n")
@@ -271,7 +274,7 @@ def _save_transcript(call_sid: str, messages: list[dict], status: str, duration:
         f.write("=" * 60 + "\n\n")
 
         for msg in messages:
-            speaker = "Claude" if msg["role"] == "assistant" else "Isaac"
+            speaker = "Claude" if msg["role"] == "assistant" else name
             f.write(f"[{speaker}]\n{msg['content']}\n\n")
 
     print(f"Transcript saved → {filename}")

@@ -62,6 +62,7 @@ call = client.calls.create(
     status_callback=f"{base_url}/status",
     status_callback_event=["completed"],
     status_callback_method="POST",
+    machine_detection="Enable",
 )
 
 print(f"Call initiated! SID: {call.sid}")
