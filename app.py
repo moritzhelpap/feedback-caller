@@ -11,6 +11,7 @@ Flow:
   6. Transcript printed to Railway logs when done
 """
 
+import glob
 import os
 from datetime import datetime
 from flask import Flask, request, Response, jsonify
@@ -28,6 +29,7 @@ twilio_client = Client(os.getenv("TWILIO_ACCOUNT_SID"), os.getenv("TWILIO_AUTH_T
 
 # In-memory transcript store keyed by call SID
 transcripts: dict[str, list[dict]] = {}
+latest_call_sid: str | None = None
 
 def build_system_prompt(name: str, topic: str) -> str:
     return f"""\
@@ -85,7 +87,9 @@ def make_call():
 
 @app.route("/answer", methods=["POST"])
 def answer():
+    global latest_call_sid
     call_sid = request.form.get("CallSid", "unknown")
+    latest_call_sid = call_sid
     name = request.args.get("name", "there")
     topic = request.args.get("topic", "just checking in")
 
@@ -209,6 +213,43 @@ def status():
         _save_transcript(call_sid, entry["messages"], call_status, duration)
 
     return "", 204
+
+
+# ---------------------------------------------------------------------------
+# Transcript retrieval
+# ---------------------------------------------------------------------------
+
+@app.route("/transcript", methods=["GET"])
+def get_transcript():
+    call_sid = request.args.get("call_sid") or latest_call_sid
+    if not call_sid:
+        return jsonify({"error": "No transcripts available yet"}), 404
+    entry = transcripts.get(call_sid)
+    if not entry:
+        return jsonify({"error": f"Transcript not found for call_sid={call_sid}"}), 404
+    messages = entry.get("messages", [])
+    return jsonify({
+        "call_sid": call_sid,
+        "message_count": len(messages),
+        "messages": messages,
+    })
+
+
+@app.route("/transcripts", methods=["GET"])
+def list_transcripts():
+    in_memory = [
+        {
+            "call_sid": sid,
+            "message_count": len(entry.get("messages", [])),
+            "preview": (entry.get("messages") or [{}])[0].get("content", "")[:120],
+        }
+        for sid, entry in transcripts.items()
+    ]
+    saved_files = sorted(glob.glob("transcript_*.txt"), reverse=True)
+    return jsonify({
+        "in_memory": in_memory,
+        "saved_files": saved_files,
+    })
 
 
 # ---------------------------------------------------------------------------

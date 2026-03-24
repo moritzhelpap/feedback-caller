@@ -9,7 +9,9 @@ Usage:
 
 import os
 import sys
+import time
 import urllib3
+import requests
 from urllib.parse import urlencode
 from twilio.rest import Client
 from twilio.http.http_client import TwilioHttpClient
@@ -63,5 +65,30 @@ call = client.calls.create(
 )
 
 print(f"Call initiated! SID: {call.sid}")
-print("Watch Railway logs for the live conversation: https://railway.app")
-print("Transcript will be printed to Railway logs when the call ends.")
+print("Waiting for call to complete ...")
+
+TERMINAL_STATUSES = {"completed", "failed", "busy", "no-answer", "canceled"}
+while True:
+    status = client.calls(call.sid).fetch().status
+    if status in TERMINAL_STATUSES:
+        print(f"Call ended — status: {status}")
+        break
+    time.sleep(3)
+
+if status == "completed":
+    transcript_url = f"{base_url}/transcript?call_sid={call.sid}"
+    print(f"\nFetching transcript from {transcript_url} ...")
+    try:
+        resp = requests.get(transcript_url, verify=False, timeout=10)
+        resp.raise_for_status()
+        data = resp.json()
+        print("\n" + "=" * 60)
+        print("CALL TRANSCRIPT")
+        print("=" * 60)
+        for msg in data.get("messages", []):
+            speaker = "Claude" if msg["role"] == "assistant" else name or "Caller"
+            print(f"\n[{speaker}]\n{msg['content']}")
+        print("\n" + "=" * 60)
+    except Exception as e:
+        print(f"Could not fetch transcript: {e}")
+        print("Check Railway logs: https://railway.app")
